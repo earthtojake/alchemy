@@ -1,0 +1,27 @@
+{
+  "name": "modeljs",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "tsc": "ts-node"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/microsoft/TypeScript-Babel-Starter.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/microsoft/TypeScript-Babel-Starter/issues"
+  },
+  "homepage": "https://github.com/microsoft/TypeScript-Babel-Starter#readme",
+  "devDependencies": {
+    "ts-node": "^8.4.1",
+    "typescript": "^3.6.3"
+  },
+  "dependencies": {
+    "flat": "^4.1.0",
+    "lodash": "^4.17.15"
+  }
+}
