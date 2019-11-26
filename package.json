@@ -1,5 +1,5 @@
 {
-  "name": "safe-type",
+  "name": "@earthtojake/alchemy",
   "version": "1.0.0",
   "description": "Safe, typed objects for Javascript",
   "main": "dist/index.js",
@@ -11,7 +11,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/microsoft/TypeScript-Babel-Starter.git"
+    "url": "git+https://github.com/earthtojake/alchemy.git"
   },
   "author": "Jake Fitzgerlad",
   "license": "MIT",

@@ -1,46 +1,62 @@
-import NewSchema, {Schema, Model, Props, getSchema, isSchemaEqual, SCHEMA_ERRORS} from '../src/index'
-import * as flat from 'flat' 
+import schema, {isSchemaEqual, validateModel} from '../src/index'
+import * as flat from 'flat'
+import { SCHEMA_ERRORS } from '../src/error'
+import { Schema, Model } from '../src/interfaces'
 
-type ExtraProps = {
-  dotPath: () => string,
-  flatten: (obj: any, delimiter?: string) => object,
-  flatMap: (obj: any, map: (val: any) => any, delimiter?: string) => object
+type SimpleUserMethods = {
+  dotKeyPath: () => string,
+  flatten: (obj: any, delimiter?: string) => {[key:string]: any},
+  flatMap: (obj: any, map: (obj: any) => any, delimiter?: string) => {[key:string]: any},
+  sleep: (timeout: number) => Promise<void>,
 }
 
-// const props: Props = {
 
-//   dotPath: function() {
-//     return this.props.path().join('.')
-//   },
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-//   flatten: function(obj: any, delimiter: string = '.') {
+const simpleUserMethods = {
 
-//     this.props.validate(obj, {
-//       ignoreRequired: true,
-//     })
+  dotKeyPath: (schema) => () => {
+    return schema.keyPath().join('.')
+  },
 
-//     const flatObj = flat.flatten(obj, {delimiter})
-//     let basePath = this.props.path().join(delimiter)
-//     if (basePath) basePath += delimiter
-//     return Object.keys(flatObj).reduce((ret, path) => ({
-//       ...ret,
-//       [basePath + path]: flatObj[path]
-//     }), {})
+  flatten: (schema) => (obj, delimiter = '.') => {
 
-//   },
+    schema.validate(obj, {
+      ignoreRequired: true,
+    })
 
-//   flatMap: function(obj: any, map: Function, delimiter: string = '.') {
+    const flatObj = flat.flatten(obj, {delimiter})
+    let baseKeyPath = schema.keyPath().join(delimiter)
+    if (baseKeyPath) baseKeyPath += delimiter
+    return Object.keys(flatObj).reduce((ret, keyPath) => ({
+      ...ret,
+      [baseKeyPath + keyPath]: flatObj[keyPath]
+    }), {})
 
-//     const flatObj = this.props.flatten(obj, delimiter)
+  },
 
-//     return Object.keys(flatObj).reduce((ret, key) => ({
-//       ...ret,
-//       [key]: map(flatObj[key])
-//     }), {})
+  flatMap: (schema) => (obj, map, delimiter = '.') => {
 
-//   }
+    const flatObj = schema.flatten(obj, delimiter)
 
-// }
+    return Object.keys(flatObj).reduce((ret, key) => ({
+      ...ret,
+      [key]: map(flatObj[key])
+    }), {})
+
+  },
+
+  sleep: (_) => async (timeout) => {
+    await sleep(timeout)
+  },
+
+  coerce: (schema) => (val) => {
+    return schema.cast(val)
+  }
+
+}
 
 const $uid = 'string'
 
@@ -150,93 +166,239 @@ const expectErrorName = (fn: Function, errName: string): void => {
 
 test('simple-schema-init', () => {
 
-  const User: Schema<SimpleUser> = NewSchema(SimpleUserModel)
+  type TestModel = {
+    hello: string,
+    world: number
+  }
+  
+  type TestMethods = {
+    foo: () => string,
+    bar: () => number
+  }
 
-  // path()
-  expect(User.props.path()).toEqual([])
-  expect(User.info.props.path()).toEqual(['info'])
-  expect(User.info.name.props.path()).toEqual(['info', 'name'])
-  expect(User.info.dob.props.path()).toEqual(['info', 'dob'])
-  expect(User.info.email.props.path()).toEqual(['info', 'email'])
-  expect(User.info.verified.props.path()).toEqual(['info', 'verified'])
+  schema<TestModel, TestMethods>(
+    {
+      hello: 'string',
+      world: 'number',
+    },
+    {
+      foo: (_) => () => 'bar',
+      bar: (_) => () => 123,
+    }
+  )
+
+  const User: Schema<SimpleUser> = schema(SimpleUserModel)
+
+  // keyPath()
+  expect(User.keyPath()).toEqual([])
+  expect(User.info.keyPath()).toEqual(['info'])
+  expect(User.info.name.keyPath()).toEqual(['info', 'name'])
+  expect(User.info.dob.keyPath()).toEqual(['info', 'dob'])
+  expect(User.info.email.keyPath()).toEqual(['info', 'email'])
+  expect(User.info.verified.keyPath()).toEqual(['info', 'verified'])
 
   expect(User.friends.__factory).toEqual(true)
-  expect(User.friends.userA.timestamp.props.path()).toEqual(['friends', 'userA', 'timestamp'])
+  expect(User.friends.userA.timestamp.keyPath()).toEqual(['friends', 'userA', 'timestamp'])
 
   // parent()
-  expect(isSchemaEqual(User, User.info.props.parent())).toEqual(true)
-  expect(isSchemaEqual(User.info.name.props.parent(), User.info)).toEqual(true)
-  expect(isSchemaEqual(User.info.props.parent(), User.info)).toEqual(false)
-  expect(isSchemaEqual(User.friends.props.parent(), User)).toEqual(true)
+  expect(isSchemaEqual(User, User.info.parent())).toEqual(true)
+  expect(User).toEqual(User.info.parent()) // by reference
+  expect(isSchemaEqual(User.info.name.parent(), User.info)).toEqual(true)
+  expect(isSchemaEqual(User.info.parent(), User.info)).toEqual(false)
+  expect(isSchemaEqual(User.friends.parent(), User)).toEqual(true)
   expect(isSchemaEqual(User.friends.userA, User.friends.userB)).toEqual(false)
-  expect(isSchemaEqual(User.friends.userA.timestamp.props.parent(), User.friends.userA)).toEqual(true)
+  expect(isSchemaEqual(User.friends.userA.timestamp.parent(), User.friends.userA)).toEqual(true)
 
 })
 
 test('simple-constraints', () => {
 
-  const Constraints = NewSchema(ConstraintsModel)
+  const Constraints = schema(ConstraintsModel)
 
   // required
-  expectErrorName(() =>Constraints.props.validate({}),SCHEMA_ERRORS.REQUIRED)
-  expect(() =>Constraints.props.validate({requiredStr:'hello'})).not.toThrowError()
+  expectErrorName(() =>Constraints.validate({}),SCHEMA_ERRORS.REQUIRED)
+  expect(() =>Constraints.validate({requiredStr:'hello'})).not.toThrowError()
 
   // maxTen
-  expectErrorName(() => Constraints.maxTen.props.validate(11), SCHEMA_ERRORS.MAX)
-  expect(() =>Constraints.maxTen.props.validate(9)).not.toThrowError()
+  expectErrorName(() => Constraints.maxTen.validate(11), SCHEMA_ERRORS.MAX)
+  expect(() =>Constraints.maxTen.validate(9)).not.toThrowError()
 
   // minFive
-  expectErrorName(() =>Constraints.minFive.props.validate(4),SCHEMA_ERRORS.MIN)
-  expect(() =>Constraints.maxTen.props.validate(6)).not.toThrowError()
+  expectErrorName(() =>Constraints.minFive.validate(4),SCHEMA_ERRORS.MIN)
+  expect(() =>Constraints.maxTen.validate(6)).not.toThrowError()
 
   // matchWow: string,
-  expectErrorName(() =>Constraints.matchWow.props.validate('wokawoka'),SCHEMA_ERRORS.MATCH)
-  expect(() =>Constraints.matchWow.props.validate('kawowza')).not.toThrowError()
+  expectErrorName(() =>Constraints.matchWow.validate('wokawoka'),SCHEMA_ERRORS.MATCH)
+  expect(() =>Constraints.matchWow.validate('kawowza')).not.toThrowError()
 
   // enumVowels: string,
-  expectErrorName(() =>Constraints.enumVowels.props.validate('w'),SCHEMA_ERRORS.ENUM)
-  expect(() =>Constraints.enumVowels.props.validate('a')).not.toThrowError()
+  expectErrorName(() =>Constraints.enumVowels.validate('w'),SCHEMA_ERRORS.ENUM)
+  expect(() =>Constraints.enumVowels.validate('a')).not.toThrowError()
 
   // maxTenStr: string,
-  expectErrorName(() =>Constraints.maxTenStr.props.validate('12345678910'),SCHEMA_ERRORS.MAXLENGTH)
-  expect(() =>Constraints.maxTenStr.props.validate('abc')).not.toThrowError()
+  expectErrorName(() =>Constraints.maxTenStr.validate('12345678910'),SCHEMA_ERRORS.MAXLENGTH)
+  expect(() =>Constraints.maxTenStr.validate('abc')).not.toThrowError()
 
   // minFiveStr: string,
-  expectErrorName(() =>Constraints.minFiveStr.props.validate('abc'),SCHEMA_ERRORS.MINLENGTH)
-  expect(() =>Constraints.minFiveStr.props.validate('12345678910')).not.toThrowError()
+  expectErrorName(() =>Constraints.minFiveStr.validate('abc'),SCHEMA_ERRORS.MINLENGTH)
+  expect(() =>Constraints.minFiveStr.validate('12345678910')).not.toThrowError()
 
   // lowerHello: string,
-  expect(Constraints.lowerHello.props.create('HELLO')).toEqual('hello')
+  expect(Constraints.lowerHello.cast('HELLO')).toEqual('hello')
 
   // upperWorld: string,
-  expect(Constraints.upperWorld.props.create('world')).toEqual('WORLD')
+  expect(Constraints.upperWorld.cast('world')).toEqual('WORLD')
 
   // trimHi: string,
-  expect(Constraints.trimHi.props.create('    hi   ')).toEqual('hi')
-  expect(Constraints.trimHi.props.create(' hi \t\n')).toEqual('hi')
+  expect(Constraints.trimHi.cast('    hi   ')).toEqual('hi')
+  expect(Constraints.trimHi.cast(' hi \t\n')).toEqual('hi')
 
   // default
-  expect(Constraints.defaultHello.props.create(undefined)).toEqual('hello')
+  expect(Constraints.defaultHello.cast(undefined)).toEqual('hello')
+
+})
+
+test('schema-get-set', () => {
+
+  type GetSetModel = {
+    upperStr: string,
+    oneToTen: number,
+  }
+
+  const GetSetModel: Model<GetSetModel> = {
+    upperStr: {
+      type: String,
+      set: (str: string) => str.toUpperCase()
+    },
+    oneToTen: {
+      type: Number,
+      get: (_int: number) => {
+        let int = Math.round(_int)
+        if (int > 10) int = 10
+        else if (int < 1) int = 1
+        return int
+      }
+    }
+  }
+
+  const GetSet = schema(GetSetModel)
+
+  const obj = GetSet.cast({
+    upperStr: 'hello',
+    oneToTen: 12.275,
+  })
+
+  expect(obj.upperStr).toEqual('HELLO')
+  expect(obj.oneToTen).toEqual(10)
+
+})  
+
+test('simple-schema-methods', async () => {
+
+  const User: Schema<SimpleUser, SimpleUserMethods> = schema(SimpleUserModel, simpleUserMethods)
+
+  // dotKeyPath method
+  expect(User.dotKeyPath()).toEqual('')
+  expect(User.info.dotKeyPath()).toEqual('info')
+  expect(User.info.name.dotKeyPath()).toEqual('info.name')
+  expect(User.info.dob.dotKeyPath()).toEqual('info.dob')
+  expect(User.info.email.dotKeyPath()).toEqual('info.email')
+  expect(User.info.verified.dotKeyPath()).toEqual('info.verified')
+  expect(User.friends.userA.timestamp.dotKeyPath()).toEqual('friends.userA.timestamp')
+
+  const userObj = {
+    info: {
+      name: 'jake',
+      dob: 1996,
+      email: 'jake@email.com',
+      verified: true
+    },
+    friends: {
+      hugh: {
+        timestamp: 10000,
+        deleted: false
+      }
+    }
+  }
+
+  // flatten method
+  expect(User.flatten(userObj)).toEqual(flat.flatten(userObj))
+  // nested flatten
+  expect(User.info.flatten(userObj.info)).toEqual(Object.keys(flat.flatten(userObj.info)).reduce((dict: object, key: string) => ({...dict, ['info.' + key]: userObj.info[key]}), {}))
+  // flat map
+  expect(User.flatMap(userObj, val => val)).toEqual(flat.flatten(userObj))
+
+  // async test
+  expect(await User.sleep(100))
 
 })
 
 test('simple-schema-validate', () => {
 
-  const User: Schema<SimpleUser> = NewSchema(SimpleUserModel)
+  const User: Schema<SimpleUser> = schema(SimpleUserModel)
 
   // type errors
-  expectErrorName(() =>User.props.validate({
+  expectErrorName(() =>User.validate({
     info: {
       name: 123,
     }
   }),SCHEMA_ERRORS.TYPE)
 
-  // invalid paths
-  expectErrorName(() =>User.props.validate({
+  // invalid keyPaths
+  expectErrorName(() =>User.validate({
     info: {
       blah: true,
     }
   }),SCHEMA_ERRORS.INVALID_PATH)
+
+  // invalid schema value
+  expectErrorName(() => validateModel('swag'), SCHEMA_ERRORS.INVALID_SCHEMA)
+
+  expectErrorName(() => validateModel({
+    hello: {
+      type: 'thisisbad'
+    }
+  }), SCHEMA_ERRORS.INVALID_SCHEMA)
+
+  // simple schema value
+  expect(() => validateModel({
+    hello: 'string',
+    hi: String,
+    world: 'String'
+  })).not.toThrowError()
+
+  expectErrorName(() => validateModel({
+    hello: 'sssstring' // invalid type
+  }), SCHEMA_ERRORS.INVALID_SCHEMA)
+
+  // complex schema value
+  expect(() => validateModel({
+    hello: {
+      type: 'string',
+      required: true,
+    }
+  })).not.toThrowError()
+
+  expectErrorName(() => validateModel({
+    hello: {
+      type: 'string',
+      blah: true, // invalid prop
+    }
+  }), SCHEMA_ERRORS.INVALID_SCHEMA)
+
+  expectErrorName(() => validateModel({
+    keyPath: { // reserved keyword
+      type: 'string'
+    }
+  }), SCHEMA_ERRORS.INVALID_SCHEMA)
+
+  expectErrorName(() => validateModel({
+    hello: {
+      type: 'string'
+    }
+  }, {
+    hello: () => 'world' // clashing custom method
+  }), SCHEMA_ERRORS.INVALID_SCHEMA)
 
   // const Root: Schema<Root> = NewSchema(
   //   RootModel,
@@ -264,7 +426,7 @@ test('simple-schema-validate', () => {
 
   // const {
   //   create: createRoot
-  // } = Root.props
+  // } = Root
   
   // const root = createRoot(testObj)
 

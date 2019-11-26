@@ -1,418 +1,341 @@
 import * as flat from 'flat'
 import * as _ from 'lodash'
+import { SchemaError, SCHEMA_ERRORS } from './error'
+import { isObject, isSchemaValue, isFactoryKey, isTypeConstructor, typeStrsCons, getTypeConstructor, getTypeOfConstructor, isArrayKey } from './utils'
+import { KeyPath, ValueReducer, Schema, Model, BaseSchema, SchemaValue, ValidateOptions, RawValue, SchemaMethods } from './interfaces'
 
-/* TYPES */
-declare interface ProxyHandler<T> {}
-interface ProxyConstructor {
-  revocable<T extends object>(target: T, handler: ProxyHandler<T>): { proxy: T; revoke: () => void; };
-  new <T extends object>(target: T, handler: ProxyHandler<T>): T;
-}
-declare var Proxy: ProxyConstructor;
+/*
+schema rules:
+can't use reserved keywords [__key, __value, __factory, __root__, ...methods] as prop in any node
+leaf nodes need to be a valid schema value
+*/
 
-type Path = Array<string>
+/*
 
-type ValueReducer<BaseType,ExtraProps> = (value: any, schema: SchemaValue<BaseType,ExtraProps>, path: Path, options?: object) => any
+reserved methods
 
-type ValidateOptions = {
-  ignoreRequired?: boolean,
-}
+keyPath()
+parent()
+validate()
+cast()
 
-type Validate<BaseType = {}> = (obj: any, options?: ValidateOptions) => BaseType
+TODO:
+partialCast() => ignore optional fields in casted object
+get(), set() => getter / setter for entire object
 
-type GetParent = () => any
+*/
 
-type Create<BaseType = {}> = (obj: any) => BaseType
+// expose all types
+export * from './interfaces'
 
-type GetPath = () => Path
+export const SCHEMA_CHECK_KEY = '__this_is_a_schema__'
+export const SCHEMA_ROOT_KEY = '__root__'
+export const OBJECT_CHECK_KEY = '__this_is_schema_object__'
+export const SCHEMA_FACTORY_KEY = '__factory'
+export const SCHEMA_VALUE_KEY = '__value'
+export const SCHEMA_KEY = '__key'
 
-type SchemaProps<BaseType = {}, ExtraProps = {}> = {
-  __key: string,
-  __value?: boolean,
-  __factory?: any,
-  __root?: boolean,
-  props: {
-    validate: Validate<BaseType>,
-    parent: GetParent,
-    create: Create<BaseType>,
-    path: GetPath,
-  } & ExtraProps 
-}
+export const validateModel = (model: any, extraProps: {[key:string]:any} = {}, keyPath: KeyPath = []) => {
 
-export type Props<ExtraProps = {}> = {
-  validate: Validate,
-  parent: GetParent,
-  create: Create,
-  path: GetPath,
-} & ExtraProps
+  if ((!isObject(model) || isSchemaValue(model)) && keyPath.length === 0) 
+    throw new SchemaError(SCHEMA_ERRORS.INVALID_SCHEMA, `Schema must be an object, not a value`)  
 
-// strings, booleans, numbers only
-type RawValue = string | number | boolean
-type TypeConstructor = StringConstructor | BooleanConstructor | NumberConstructor
-type TypeString = 'string' | 'String' | 'boolean' | 'Boolean' | 'number' | 'Number'
+  Object.keys(model).forEach((key:string) => {
 
-type SchemaValueOptions = {
-  default?: any,
-  required?: boolean,
-  max?: number,
-  min?: number,
-  lowercase?: boolean,
-  uppercase?: boolean,
-  trim?: boolean,
-  match?: RegExp,
-  enum?: Array<any>,
-  minlength?: number,
-  maxlength?: number,
-  get?: (val: any) => any,
-  set?: (val: any) => any,
-}
-
-type SchemaValue<BaseType = {}, ExtraProps = {}> = {
-  type: TypeConstructor
-  typeof: TypeString,
-} & SchemaValueOptions & SchemaProps<BaseType, ExtraProps>
-
-type ModelValue = TypeConstructor | TypeString | {
-  type: TypeConstructor | TypeString,
-} & SchemaValueOptions
-
-export type Model<BaseType> = {
-  [K in keyof BaseType]:
-    BaseType[K] extends ModelValue ? ModelValue :
-    BaseType[K] extends Schema<BaseType> ? Schema<BaseType[K]> :
-    BaseType[K] extends object ? Model<BaseType[K]> :
-    ModelValue;
-}
-
-export type Schema<BaseType = {}, ExtraProps = {}> = {
-  [K in keyof BaseType]:
-    BaseType[K] extends object ? Schema<BaseType[K], ExtraProps>:
-    SchemaValue<BaseType[K], ExtraProps>;
-} & SchemaProps<BaseType, ExtraProps>
-
-/* HELPER FUNCTIONS */
-const isObject = (value:any):boolean => {
-  return (typeof value === 'object' && value !== null)
-}
-
-const isFactoryKey = (obj:any):boolean => {
-  if (!isObject(obj)) return false
-  const props = Object.keys(obj)
-  return (props.length === 1 || !!obj.__root)
-    && getTypeConstructor(props[0]) === String
-}
-
-const isArrayKey = (obj:any):boolean => {
-  if (!isObject(obj)) return false
-  return Array.isArray(obj) && obj.length === 1
-}
-
-const typeConsStrs: {[key:string]:string} = {
-  [String.toString()]: 'string',
-  [Number.toString()]: 'number',
-  [Boolean.toString()]: 'boolean'
-}
-
-const typeStrsCons:{[key:string]:TypeConstructor} = {
-  'string':String,
-  'String':String, 
-  'number':Number, 
-  'Number':Number, 
-  'boolean':Boolean, 
-  'Boolean':Boolean
-}
-
-// return typeof constructor
-function getTypeOfConstructor(typeCon:any):string {
-  return typeConsStrs[typeCon]
-}
-
-function getTypeConstructor(obj:any): (TypeConstructor | undefined) {
-
-  if (obj === null || obj === undefined) return undefined
-
-  // is obj a string?
-  if (typeof obj === 'string') {
-    // check if type is string or type-constructor as a string
-    if (typeConsStrs[obj]) return typeStrsCons[typeConsStrs[obj]]
-    else if (typeStrsCons[obj]) return typeStrsCons[obj]
-  } else {
-    // check if obj is type-constructor
-    const keys = Object.keys(typeStrsCons)
-    for (let i = 0; i < keys.length; i++) {
-      const key = keys[i]
-      const typeCon = typeStrsCons[key]
-      if (typeCon === obj) return typeCon
+    if (schemaProps[key]) {
+      throw new SchemaError(SCHEMA_ERRORS.INVALID_SCHEMA, `Reserved method "${key}" used as key in schema, please rename this field.`, keyPath)
     }
-  }
 
-  return undefined
-
-}
-
-function isTypeConstructor(obj:any):boolean {
-  return !!getTypeConstructor(obj)
-}
-
-function isSchemaValue(obj:any):boolean {
-
-  return obj !== null && obj !== undefined && (
-    isTypeConstructor(obj) || // raw type
-    (isObject(obj) && isTypeConstructor(obj.type)) // object with "type" property
-  )
-
-}
-
-export const SCHEMA_ERRORS = {
-  INVALID_SCHEMA: 'SchemaError',
-  INVALID_PATH: 'SchemaPathError',
-  TYPE: 'SchemaTypeError',
-  REQUIRED: 'SchemaRequiredError',
-  MAX: 'SchemaMaxError',
-  MIN: 'SchemaMinError',
-  MATCH: 'SchemaMatchError',
-  ENUM: 'SchemaEnumError',
-  MINLENGTH: 'SchemaMinlengthError',
-  MAXLENGTH: 'SchemaMaxlengthError',
-}
-
-class SchemaError extends Error {
-  constructor(name: string, message = "", path?: Path) {
-    super(message);
-    let preMsg = `Schema violation`
-    if (path) {
-      const pathStr = `[${path.join(', ')}]`
-      preMsg += ` at ${pathStr}`
+    if (extraProps[key]) {
+      throw new SchemaError(SCHEMA_ERRORS.INVALID_SCHEMA, `User-defined method "${key}" used as key in schema, please rename this method or field.`, keyPath)
     }
-    this.name = name
-    this.message = `${preMsg}, ${message}`;
-  }
+
+    let val = model[key]
+
+    const validTypes = `[${Object.keys(typeStrsCons).map(s => `'${s}'`).join(', ')}]`
+
+    if (isObject(val) && val.type) {
+      // check val.type
+      if (!isTypeConstructor(val.type) && !typeStrsCons[val.type]) {
+        // "type" is incorrectly formatted
+        throw new SchemaError(SCHEMA_ERRORS.INVALID_SCHEMA, `Invalid value ${val} for 'type' prop. THe keyword 'type' is a reserved in schemas and must be a type constructor [String, Boolean, Number] or type string ${validTypes}.`, keyPath)
+      }
+      // check keys
+      Object.keys(val).forEach(prop => {
+        if (!schemaValueProps[prop]) 
+          throw new SchemaError(SCHEMA_ERRORS.INVALID_SCHEMA, `Invalid prop '${prop}' in schema value.`, keyPath)
+      })
+    } else if (!isSchemaValue(val) && isObject(val)) {
+      // object
+      validateModel(val, extraProps, keyPath.concat(key))
+    } else if (!isSchemaValue(val)) {
+      // not object or schema value, throw error
+      throw new SchemaError(SCHEMA_ERRORS.INVALID_SCHEMA, `Invalid value ${val} in schema. Schema values must be a type constructor [String, Boolean, Number] or a type string ${validTypes} or objects which contain this type prop.`, keyPath)
+    }
+
+  })
+
 }
 
-const defaultSchemaValue = {
-  type: undefined,
-  typeof: undefined,
-  default: undefined,
-  required: undefined,
-  max: undefined,
-  min: undefined,
-  lowercase: undefined,
-  uppercase: undefined,
-  trim: undefined,
-  match: undefined,
-  enum: undefined,
-  minlength: undefined,
-  maxlength: undefined,
-  get: undefined,
-  set: undefined,
+const schemaValueProps: {[key:string]:boolean} = {
+  type: true,
+  typeof: true,
+  default: true,
+  required: true,
+  max: true,
+  min: true,
+  lowercase: true,
+  uppercase: true,
+  trim: true,
+  match: true,
+  enum: true,
+  minlength: true,
+  maxlength: true,
+  get: true,
+  set: true,
+}
+
+const schemaProps: {[key:string]:boolean} = {
+  validate: true,
+  parent: true,
+  cast: true,
+  keyPath: true,
+  set: true,
+  get: true,
+  setRef: true,
 }
 
 /* MODEL GENERATOR */
-function NewSchema<
-  BaseType = any, 
-  ExtraProps = object
+function schema<
+  BaseType, 
+  ExtraProps = {},
 >(
   model: Model<BaseType>,
-  extraProps?: ExtraProps
+  extraProps?: SchemaMethods<BaseType, ExtraProps>,
 ): Schema<BaseType, ExtraProps> {
 
   // todo: ensure extra props do not clash with reserved props
 
   type ReservedProps = {[key:string]:boolean}
 
-  const baseReservedProps: ReservedProps = {
-    props: true,
-    __factory: true,
-    __value: true,
-    __key: true,
-  }
-
-  let schema = {} as Schema<BaseType, ExtraProps>
-
   const _extraProps = (extraProps||{}) as {[key:string]:any}
 
-  const handler = {
+  const baseReservedProps: ReservedProps = {
+    [SCHEMA_FACTORY_KEY]: true,
+    __value: true,
+    __key: true,
+    ...schemaProps,
+    ...(<any>Object).keys(_extraProps).reduce((dict: object, extraProp: string) => ({...dict, [extraProp]: true}), {}),
+  }
 
-    get: function(obj: any, prop: string) {
+  let schema = {} as BaseSchema<BaseType, ExtraProps>
 
-      if (prop === '__this_is_a_schema__') return true
+  function createHandler() {
 
-      // context from parent
-      const factoryValue = obj.__factory
-      const isFactory = !!factoryValue
+    return {
 
-      if (isFactory && prop === '__factory') return true
+      get: function(obj: any, prop: string) {
 
-      // value
-      let value = obj[prop]
-      if (isFactory) value = factoryValue
+        // hidden props
+        if (prop === SCHEMA_CHECK_KEY) return true
 
-      let isRoot = !!obj.__root && !isSchemaRoot(value)
+        const getPrevKeyPath = _.get(obj, ['keyPath'], () => [])
 
-      const isLeaf = !!obj.__value
+        // context from parent
+        const factoryValue = obj[SCHEMA_FACTORY_KEY]
+        const isFactory = !!factoryValue
 
-      // reserved properties
-      let reservedProps = baseReservedProps
-      if (isLeaf) {
-        reservedProps = {
-          ...reservedProps,
-          ...(<any>Object).keys(defaultSchemaValue).reduce((obj:ReservedProps, key:string) => {
-            obj[key] = true
-            return obj
-          }, {}),
-        }
-      }
+        if (isFactory && prop === SCHEMA_FACTORY_KEY) return true
 
-      // parse value
-      if (isSchemaRoot(value)) {
-        value = (<any>Object).assign({}, value)
-        value.__key = prop
-      }
+        // value
+        let value = obj[prop]
+        if (isFactory) value = factoryValue
 
-      let schema: any = undefined
+        let isRoot = !!obj[SCHEMA_ROOT_KEY] && !isSchemaRoot(value)
 
-      const getPrevPath = _.get(obj, ['props', 'path'], () => [])
-      const path = () => {
-        if (isRoot) return []
-        return getPrevPath ? getPrevPath().concat(prop) : [prop]
-      }
-  
-      const props = {
+        const isLeaf = !!obj.__value
 
-        // validate object against schema
-        validate: (obj: any) => validate(obj, schema), // inject schema into validator
-
-        // get path
-        path,
-
-        // get parent node
-        parent: () => {
-          const root = this.__getRoot()
-          const path = getPrevPath()
-          if (path.length === 0) return root
-          else return _.get(root, path)
-        },
-
-        create: (obj: any) => create(obj, schema),
-  
-        // extra props
-        ...(<any>Object).keys(_extraProps).reduce((obj: object, key: string) => {
-
-          return {
-            ...obj,
-            [key]: _extraProps[key].bind(schema)
+        // reserved properties
+        let reservedProps = baseReservedProps
+        if (isLeaf) {
+          reservedProps = {
+            ...reservedProps,
+            ...schemaValueProps
           }
-  
-        }, {})
-  
-      }
-  
-      if (reservedProps[prop]) {
-
-        schema = obj[prop]
-        
-      } else if (isSchemaValue(value)) {
-
-        const rawType = !isTypeConstructor(value) ? value.type : value
-        const type = getTypeConstructor(rawType)
-
-        let valueFeatures = !isTypeConstructor(value) ? value : {}
-        
-        valueFeatures = {
-          ...valueFeatures,
-          type: type, // hardcode type
-          typeof: getTypeOfConstructor(type), // inject typeof as string
         }
-        
-        // return getters for leaf values of schema
-        schema = new Proxy({
-          __value: true,
-          __key: prop,
-          ...valueFeatures,
-          props
-        }, handler)
-        
-      } else if (isObject(value)) {
-  
-        // nested object
-        if (isFactoryKey(value) || isArrayKey(value)) {
-          
-          // return node with child creator
-          const factoryKey = Object.keys(value)[0]
-          const child = value[factoryKey]
 
-          schema = new Proxy({
-            __factory: child,
-            __key: prop,
-            props
-          }, handler)
+        // parse value
+        if (isSchemaRoot(value)) {
+          value = (<any>Object).assign({}, value)
+          value.__key = prop
+        }
+
+        let schema = {} as BaseSchema<BaseType, ExtraProps>
+
+        const keyPath = () => {
+          if (isRoot) return []
+          return getPrevKeyPath ? getPrevKeyPath().concat(prop) : [prop]
+        }
+
+        // reserved: validate, create, parent, get, set
+    
+        const props = {
+
+          // validate object against schema
+          validate: (obj: any) => validate(obj, schema), // inject schema into validator
+
+          // get keyPath
+          keyPath,
+
+          // get parent node
+          parent: () => {
+            const root = this.__getRoot()
+            const keyPath = getPrevKeyPath()
+            if (keyPath.length === 0) return root
+            else return _.get(root, keyPath)
+          },
+
+          cast: (obj: any) => cast(obj, schema),
+    
+          // extra props
+          ...(<any>Object).keys(_extraProps).reduce((obj: object, key: string) => {
+
+            if (_extraProps[key]({}) instanceof Promise) {
+              // return await method
+              return {
+                ...obj,
+                [key]: async (...args: any[]) => await _extraProps[key](schema)(...args)
+              }
+            } else {
+              return {
+                ...obj,
+                [key]: (...args: any[]) => _extraProps[key](schema)(...args)
+              }
+            }
+    
+          }, {})
+    
+        }
+    
+        if (reservedProps[prop]) {
+
+          schema = obj[prop]
+          
+        } else if (isSchemaValue(value)) {
+
+          const rawType = !isTypeConstructor(value) ? value.type : value
+          const type = getTypeConstructor(rawType)
+
+          let valueFeatures = !isTypeConstructor(value) ? value : {}
+          
+          valueFeatures = {
+            ...valueFeatures,
+            type: type, // hardcode type
+            typeof: getTypeOfConstructor(type), // inject typeof as string
+          }
+          
+          // return getters for leaf values of schema
+          if (!isSchema(value)) {
+            schema = new Proxy({
+              __value: true,
+              __key: prop,
+              ...valueFeatures,
+              ...props
+            }, createHandler())
+            obj[prop] = schema
+          } else {
+            schema = value
+          }
+          
+        } else if (isObject(value)) {
+    
+          // nested object
+          if (isFactoryKey(value) || isArrayKey(value)) {
+            
+            // return node with child creator
+            const factoryKey = Object.keys(value)[0]
+            let child = value[factoryKey]
+
+            // TODO: cache factory children
+            schema = new Proxy({
+              [SCHEMA_FACTORY_KEY]: child,
+              __key: prop,
+              ...props
+            }, createHandler())
+
+          } else {
+    
+            // return basic node
+            if (!isSchema(value)) {
+              schema = new Proxy({
+                __key: prop,
+                ...value,
+                ...props
+              }, createHandler())
+              obj[prop] = schema
+            } else {
+              schema = value
+            }
+    
+          }
     
         } else {
-  
-          // return basic node
-          schema = new Proxy({
-            __key: prop,
-            ...value,
-            props
-          }, handler)
-  
-        }
-  
-      } else {
 
-        // immediately return true value
-        schema = value
-        
+          schema = value
+          
+        }
+
+        return schema
+
+      },
+
+      set: () => {
+        // cannot set values
+        throw new SchemaError(SCHEMA_ERRORS.SET, `Schemas are immutable. Do not attempt to set their properties`)
+      },
+
+      __getRoot: (): BaseSchema<BaseType, ExtraProps> => {
+        return schema
       }
 
-      return schema
-
-    },
-
-    set: () => {
-      // cannot set values
-      throw Error(`Schema vioaltion: Schemas are immutable. Do not attempt to set their properties`)
-    },
-
-    __getRoot: (): Schema<BaseType, ExtraProps> => {
-      return schema
     }
 
   }
 
   function reduceValues(obj: any, schema: any, reduceValue: ValueReducer<BaseType, ExtraProps>) {
 
-    const basePath = schema.props.path()
+    const baseKeyPath = schema.keyPath()
   
-    const _reduce = function(obj: any, schema: any, basePath: Path = []) {
+    const _reduce = function(obj: any, schema: any, baseKeyPath: KeyPath = []) {
   
       if (!isObject(obj)) {
         return {
-          [basePath.join('.')]: reduceValue(obj, schema, basePath)
+          [baseKeyPath.join('.')]: reduceValue(obj, schema, baseKeyPath)
         }
       }
   
-      const pathsObj = flat.flatten(obj)
-      let validatedPaths: {[key:string]:any} = {}
+      const keyPathsObj = flat.flatten(obj)
+      let validatedKeyPaths: {[key:string]:any} = {}
   
       forEachValue(schema, (_1, val, isFactory) => {
   
-        const path = val.props.path()
-        const relPath = path.slice(basePath.length)
+        const keyPath = val.keyPath()
+        const relKeyPath = keyPath.slice(baseKeyPath.length)
   
         if (isFactory) {
   
-          const factorySchema = _.get(schema, relPath)
+          const factorySchema = _.get(schema, relKeyPath)
   
-          const objVals = (<any>Object).keys(pathsObj).reduce((objVals: {[key:string]: {val:any, path:Path}}, dotPath: string) => {
-            const pathArr = basePath.concat(dotPath.split('.'))
-            const factoryPathArr = pathArr.splice(0, path.length)
-            if (factoryPathArr.join('.') === path.join('.')) {
-              const factoryKey = pathArr[0]
+          const objVals = (<any>Object).keys(keyPathsObj).reduce((objVals: {[key:string]: {val:any, keyPath:KeyPath}}, dotKeyPath: string) => {
+            const keyPathArr = baseKeyPath.concat(dotKeyPath.split('.'))
+            const factoryKeyPathArr = keyPathArr.splice(0, keyPath.length)
+            if (factoryKeyPathArr.join('.') === keyPath.join('.')) {
+              const factoryKey = keyPathArr[0]
               return {
                 ...objVals,
                 [factoryKey]: {
-                  val: _.get(obj, factoryPathArr.concat([factoryKey]).slice(basePath.length)),
-                  path: factoryPathArr.concat([factoryKey])
+                  val: _.get(obj, factoryKeyPathArr.concat([factoryKey]).slice(baseKeyPath.length)),
+                  keyPath: factoryKeyPathArr.concat([factoryKey])
                 }
               }
             } else {
@@ -421,59 +344,58 @@ function NewSchema<
           }, {})
   
           Object.keys(objVals).forEach(key => {
-            validatedPaths = {
-              ...validatedPaths,
-              ..._reduce(objVals[key].val, factorySchema[key], objVals[key].path)
+            validatedKeyPaths = {
+              ...validatedKeyPaths,
+              ..._reduce(objVals[key].val, factorySchema[key], objVals[key].keyPath)
             }
           })
   
         } else {
   
-          const relPath = path.slice(basePath.length)
+          const relKeyPath = keyPath.slice(baseKeyPath.length)
   
-          const nestedSchema = _.get(schema, relPath)
-          const nestedVal = _.get(obj, relPath)
+          const nestedSchema = _.get(schema, relKeyPath)
+          const nestedVal = _.get(obj, relKeyPath)
   
-          const fullPath = basePath.concat(relPath)
-          validatedPaths[fullPath.join('.')] = reduceValue(nestedVal, nestedSchema, fullPath)
-          // console.log(fullPath, nestedVal)
+          const fullKeyPath = baseKeyPath.concat(relKeyPath)
+          validatedKeyPaths[fullKeyPath.join('.')] = reduceValue(nestedVal, nestedSchema, fullKeyPath)
   
         }
   
       })
   
-      return validatedPaths
+      return validatedKeyPaths
   
     }
   
     // edge-case for single value
     if (!isObject(obj)) {
-      return reduceValue(obj, schema as any, basePath)
+      return reduceValue(obj, schema as any, baseKeyPath)
     }
   
     // catch non-existant values in schema
-    const objectPaths:{[key:string]:any} = flat.flatten(obj)
+    const objectKeyPaths:{[key:string]:any} = flat.flatten(obj)
     
-    const _validatedPaths = _reduce(obj, schema, basePath)
-    const validatedPaths:{[key:string]:any} = Object.keys(_validatedPaths).reduce((paths, pathKey) => {
-      const relPathKey = pathKey.split('.').slice(basePath.length).join('.')
+    const _validatedKeyPaths = _reduce(obj, schema, baseKeyPath)
+    const validatedKeyPaths:{[key:string]:any} = Object.keys(_validatedKeyPaths).reduce((keyPaths, keyPathKey) => {
+      const relKeyPathKey = keyPathKey.split('.').slice(baseKeyPath.length).join('.')
       return {
-        ...paths,
-        [relPathKey]: _validatedPaths[pathKey]
+        ...keyPaths,
+        [relKeyPathKey]: _validatedKeyPaths[keyPathKey]
       }
     }, {})
   
-    Object.keys(validatedPaths).forEach(pathKey => {
-      delete objectPaths[pathKey]
+    Object.keys(validatedKeyPaths).forEach(keyPathKey => {
+      delete objectKeyPaths[keyPathKey]
     })
   
-    Object.keys(objectPaths).forEach(path => {
-      const val = objectPaths[path]
-      const nestedSchema = _.get(schema, path)
-      validatedPaths[path] = reduceValue(val, nestedSchema, path.split('.'))
+    Object.keys(objectKeyPaths).forEach(keyPath => {
+      const val = objectKeyPaths[keyPath]
+      const nestedSchema = _.get(schema, keyPath)
+      validatedKeyPaths[keyPath] = reduceValue(val, nestedSchema, keyPath.split('.'))
     })
   
-    return flat.unflatten(validatedPaths)
+    return flat.unflatten(validatedKeyPaths)
   
   }
   
@@ -481,17 +403,16 @@ function NewSchema<
     return reduceValues(obj, schema, validateValue)
   }
   
-  const validateValue: ValueReducer<BaseType,ExtraProps> = (value, schema: SchemaValue<BaseType,ExtraProps>, path, options: ValidateOptions = {}) => {
+  const validateValue: ValueReducer<BaseType,ExtraProps> = (value, schema: SchemaValue<BaseType,ExtraProps>, keyPath, options: ValidateOptions = {}) => {
 
     const {
       ignoreRequired = false,
     } = options
   
     if (!schema) {
-      throw new SchemaError(SCHEMA_ERRORS.INVALID_PATH, 'Path does not exist in schema', path)
+      throw new SchemaError(SCHEMA_ERRORS.INVALID_PATH, 'KeyPath does not exist in schema', keyPath)
     }
       
-    const pathStr = `[${path.join(', ')}]`
     let valStr = value ? `${value.toString()}` : 'undefined'
     if (typeof value === 'string') valStr = `'${valStr}'` 
   
@@ -499,26 +420,26 @@ function NewSchema<
   
       if (schema.typeof !== typeof value) {
         const typeStr = typeof value
-        throw new SchemaError(SCHEMA_ERRORS.TYPE, `Invalid type '${typeStr}' for value ${valStr}, should be type '${schema.typeof}'`, path)
+        throw new SchemaError(SCHEMA_ERRORS.TYPE, `Invalid type '${typeStr}' for value ${valStr}, should be type '${schema.typeof}'`, keyPath)
       }
   
       if (schema.type === Number) {
         
         if (schema.min !== undefined && value < schema.min)
-          throw new SchemaError(SCHEMA_ERRORS.MIN, `Number ${valStr} less than minimum ${schema.min}`, path)
+          throw new SchemaError(SCHEMA_ERRORS.MIN, `Number ${valStr} less than minimum ${schema.min}`, keyPath)
         if (schema.max !== undefined && value > schema.max)
-          throw new SchemaError(SCHEMA_ERRORS.MAX, `Number ${valStr} greater than maximum ${schema.max}`, path)
+          throw new SchemaError(SCHEMA_ERRORS.MAX, `Number ${valStr} greater than maximum ${schema.max}`, keyPath)
       
       } else if (schema.type === String) {
   
         if (schema.maxlength !== undefined && value.length > schema.maxlength)
-          throw new SchemaError(SCHEMA_ERRORS.MAXLENGTH, `String length of value ${valStr} greater than max length ${schema.maxlength}`, path) 
+          throw new SchemaError(SCHEMA_ERRORS.MAXLENGTH, `String length of value ${valStr} greater than max length ${schema.maxlength}`, keyPath) 
   
         if (schema.minlength !== undefined && value.length < schema.minlength)
-          throw new SchemaError(SCHEMA_ERRORS.MINLENGTH, `String length of value ${valStr} less than min length ${schema.minlength}`, path) 
+          throw new SchemaError(SCHEMA_ERRORS.MINLENGTH, `String length of value ${valStr} less than min length ${schema.minlength}`, keyPath) 
 
         if (schema.match && !schema.match.test(value))
-          throw new SchemaError(SCHEMA_ERRORS.MATCH, `String ${valStr} does not match regular expression in schema`, path)
+          throw new SchemaError(SCHEMA_ERRORS.MATCH, `String ${valStr} does not match regular expression in schema`, keyPath)
 
       }
 
@@ -526,7 +447,7 @@ function NewSchema<
 
         if (schema.enum.indexOf(value) === -1) {
           const enumStr = `[${schema.enum.join(', ')}]`
-          throw new SchemaError(SCHEMA_ERRORS.ENUM, `String of value ${valStr} is not in the enum ${enumStr}`, path) 
+          throw new SchemaError(SCHEMA_ERRORS.ENUM, `String of value ${valStr} is not in the enum ${enumStr}`, keyPath) 
         }
 
       }
@@ -534,7 +455,7 @@ function NewSchema<
     } else {
   
       if (schema.required && !ignoreRequired) {
-        throw new SchemaError(SCHEMA_ERRORS.REQUIRED, `Marked as required, got ${valStr}`, path)
+        throw new SchemaError(SCHEMA_ERRORS.REQUIRED, `Marked as required, got ${valStr}`, keyPath)
       }
   
     }
@@ -543,19 +464,13 @@ function NewSchema<
   
   }
   
-  function create(obj: any, schema: any) {
-
-    if (!isObject(obj)) {
-      return coerceValue(obj, schema, schema.props.path())
-    }
+  function cast(obj: any, schema: any) {
 
     type CreateContext = {
       proxies: {
-        [pathKey:string]: {
-          [prop:string]: {
-            get: (val:RawValue) => RawValue,
-            set: (val:RawValue) => RawValue
-          }
+        [keyPathKey:string]: {
+          get: (val:any) => any,
+          set: (val:any) => any
         }
       }
     }
@@ -563,6 +478,9 @@ function NewSchema<
     const ctx: CreateContext = {
       proxies: {}
     }
+
+    // validate original object
+    validate(obj, schema)
 
     // coerce object values
     const coercedObj = reduceValues(obj, schema, coerceValue)
@@ -572,48 +490,48 @@ function NewSchema<
 
     const proxify = (coercedObj: any) => {
 
-      function getNodeList(o: any, basePath: Path = []): {[key:string]:any} {
+      function getNodeList(o: any, baseKeyPath: KeyPath = []): {[key:string]:any} {
         
-        let paths:{[key:string]:any} = {}
+        let keyPaths:{[key:string]:any} = {}
 
-        if (basePath.length > 0) paths[basePath.join('.')] = o
+        if (baseKeyPath.length > 0) keyPaths[baseKeyPath.join('.')] = o
 
-        if (!o || !isObject(o)) return paths
+        if (!o || !isObject(o)) return keyPaths
 
         const _o = o as {[key:string]:any}
 
         Object.keys(_o).forEach((key:string) => {
-          const path = basePath.concat([key])
-          const pathKey = path.join('.')
-          paths[pathKey] = _o[key]
+          const keyPath = baseKeyPath.concat([key])
+          const keyPathKey = keyPath.join('.')
+          keyPaths[keyPathKey] = _o[key]
           if (isObject(_o[key])) {
-            paths = {
-              ...paths,
-              ...getNodeList(_o[key], path)
+            keyPaths = {
+              ...keyPaths,
+              ...getNodeList(_o[key], keyPath)
             }
           }
         })
 
-        return paths
+        return keyPaths
 
       }
 
       const nodes = getNodeList(coercedObj)
 
-      Object.keys(nodes).reverse().forEach(pathKey => {
-        
-        const value = nodes[pathKey]
+      const createSchemaObject = (value:any, schema:any, keyPathKey:string = '') => {
 
-        const node = isObject(value) ? new Proxy(value, {
+        return isObject(value) ? new Proxy(value, {
 
           get: (obj: any, prop: string) => {
 
             if (prop === '__get_object_schema__') {
-              return _.get(schema, pathKey)
+              return keyPathKey ? _.get(schema, keyPathKey) : schema
             }
 
+            if (prop === OBJECT_CHECK_KEY) return true
+
             // inject custom getter
-            const customGet = _.get(ctx.proxies, [pathKey, prop, 'get'])
+            const customGet = _.get(ctx.proxies, keyPathKey ? [keyPathKey, prop, 'get'] : [prop, 'get'])
             if (customGet) {
               return customGet(obj[prop])
             }
@@ -626,17 +544,17 @@ function NewSchema<
 
             let value = _value
 
-            const basePathKey = pathKey ? pathKey + '.' + prop : prop
+            const baseKeyPathKey = keyPathKey ? keyPathKey + '.' + prop : prop
 
             // validate new value
-            const basePath = basePathKey.split('.')
-            const nestedSchema = _.get(schema, basePath)
+            const baseKeyPath = baseKeyPathKey.split('.')
+            const nestedSchema = _.get(schema, baseKeyPath)
             validate(value, nestedSchema)
 
-            const parentSchema = nestedSchema.props.parent()
+            const parentSchema = nestedSchema.parent()
 
             obj[prop] = value
-            const parentNode = create(obj, parentSchema)
+            const parentNode = cast(obj, parentSchema)
             obj[prop] = parentNode[prop]
 
             return true
@@ -645,21 +563,29 @@ function NewSchema<
 
         }) : value
 
-        _.set(coercedObj, pathKey, node)
+      }
+
+      Object.keys(nodes).reverse().forEach(keyPathKey => {
+        
+        const value = nodes[keyPathKey]
+
+        const node = createSchemaObject(value, schema, keyPathKey)
+
+        _.set(coercedObj, keyPathKey, node)
 
       })
 
-      return coercedObj
+      return createSchemaObject(coercedObj, schema)
 
     }
 
-    function coerceValue(_value: any, schema: SchemaValue<BaseType, ExtraProps>, path: Path) {
+    function coerceValue(_value: any, schema: any, keyPath: KeyPath): RawValue {
   
       // called validate
     
       let value = _value
 
-      if (schema.__factory) {
+      if (schema[SCHEMA_FACTORY_KEY]) {
         // skip coercing
         return value
       }
@@ -685,13 +611,10 @@ function NewSchema<
         }
   
       }
-  
-      const parentPathKey = path.slice(0,path.length-1).join('.')
-      const prop = path[path.length-1]
     
       if (value && schema.get) {
         // create ref for getter to inject into proxy
-        _.set(ctx.proxies, [parentPathKey, prop, 'get'], schema.get)
+        _.set(ctx.proxies, [keyPath.join('.'), 'get'], schema.get)
       }
   
       if (value && schema.set) {
@@ -703,19 +626,22 @@ function NewSchema<
     
     }
 
-    return proxify(coercedObj)
+    return !isObject(coercedObj) ? coercedObj :proxify(coercedObj)
 
   }
 
-  let {__root}:any = new Proxy({
-    __root: {
+  // validates inputted model for vanilla js (non-typed)
+  validateModel(model, extraProps)
+
+  let proxy:any = new Proxy({
+    [SCHEMA_ROOT_KEY]: {
       ...model,
     },
-  }, handler);
+  }, createHandler());
 
-  schema = __root
+  schema = proxy[SCHEMA_ROOT_KEY]
 
-  return schema as Schema<BaseType, ExtraProps>
+  return schema as BaseSchema<BaseType, ExtraProps>
 
 }
 
@@ -734,7 +660,7 @@ function forEachValue(obj: any, callback: (key: string | number, obj: any, isFac
     if (!val) return
 
     if (typeof val === 'function') return
-    else if (val.__value || val.__factory) callback(key, val, !!val.__factory)
+    else if (val.__value || val[SCHEMA_FACTORY_KEY]) callback(key, val, !!val[SCHEMA_FACTORY_KEY])
     else if (isObject(val) && !isEmpty(obj)) forEachValue(val, callback)
 
   })
@@ -743,11 +669,11 @@ function forEachValue(obj: any, callback: (key: string | number, obj: any, isFac
 
 /* HELPER FUNCTIONS */
 export const isSchema = (obj:any):boolean => {
-  return obj != null && !!obj.__key && (!!obj.__this_is_a_schema__ || isSchemaRoot(obj))
+  return obj != null && (!!obj[SCHEMA_CHECK_KEY] || isSchemaRoot(obj))
 }
 
 export const isSchemaRoot = (obj:any):boolean => {
-  return obj != null && obj.__key === '__root'
+  return obj != null && obj.__key === SCHEMA_ROOT_KEY
 }
 
 export const isSchemaEqual = (schemaA:any, schemaB:any):boolean => {
@@ -762,4 +688,4 @@ export const getSchema = (obj:any):boolean => {
   return obj.__get_object_schema__
 }
 
-export default NewSchema
+export default schema
