@@ -2,7 +2,8 @@ import * as flat from 'flat'
 import * as _ from 'lodash'
 import { SchemaError, SCHEMA_ERRORS } from './error'
 import { isObject, isSchemaValue, isFactoryKey, isTypeConstructor, typeStrsCons, getTypeConstructor, getTypeOfConstructor, isArrayKey } from './utils'
-import { KeyPath, ValueReducer, Schema, Model, BaseSchema, SchemaValue, ValidateOptions, RawValue, SchemaMethods } from './interfaces'
+import { KeyPath, ValueReducer, Schema, Model, BaseSchema, SchemaValue, ValidateOptions, RawValue } from './interfaces'
+import { createFirebaseMethods, firebaseProps, FirebaseMethods } from './firebase'
 
 /*
 schema rules:
@@ -102,33 +103,30 @@ const schemaProps: {[key:string]:boolean} = {
   keyPath: true,
   set: true,
   get: true,
-  setRef: true,
+  ...firebaseProps
 }
 
 /* MODEL GENERATOR */
 function schema<
   BaseType, 
-  ExtraProps = {},
+  
 >(
   model: Model<BaseType>,
-  extraProps?: SchemaMethods<BaseType, ExtraProps>,
-): Schema<BaseType, ExtraProps> {
+  firebaseApp: firebase.app.App,
+): Schema<BaseType> {
 
   // todo: ensure extra props do not clash with reserved props
 
   type ReservedProps = {[key:string]:boolean}
-
-  const _extraProps = (extraProps||{}) as {[key:string]:any}
 
   const baseReservedProps: ReservedProps = {
     [SCHEMA_FACTORY_KEY]: true,
     __value: true,
     __key: true,
     ...schemaProps,
-    ...(<any>Object).keys(_extraProps).reduce((dict: object, extraProp: string) => ({...dict, [extraProp]: true}), {}),
   }
 
-  let schema = {} as BaseSchema<BaseType, ExtraProps>
+  let schema = {} as BaseSchema<BaseType>
 
   function createHandler() {
 
@@ -170,7 +168,7 @@ function schema<
           value.__key = prop
         }
 
-        let schema = {} as BaseSchema<BaseType, ExtraProps>
+        let schema: any = {}
 
         const keyPath = () => {
           if (isRoot) return []
@@ -197,23 +195,8 @@ function schema<
 
           cast: (obj: any) => cast(obj, schema),
     
-          // extra props
-          ...(<any>Object).keys(_extraProps).reduce((obj: object, key: string) => {
-
-            if (_extraProps[key]({}) instanceof Promise) {
-              // return await method
-              return {
-                ...obj,
-                [key]: async (...args: any[]) => await _extraProps[key](schema)(...args)
-              }
-            } else {
-              return {
-                ...obj,
-                [key]: (...args: any[]) => _extraProps[key](schema)(...args)
-              }
-            }
-    
-          }, {})
+          // firebase props
+          ...createFirebaseMethods(schema, firebaseApp)
     
         }
     
@@ -294,7 +277,7 @@ function schema<
         throw new SchemaError(SCHEMA_ERRORS.SET, `Schemas are immutable. Do not attempt to set their properties`)
       },
 
-      __getRoot: (): BaseSchema<BaseType, ExtraProps> => {
+      __getRoot: (): BaseSchema<BaseType> => {
         return schema
       }
 
@@ -302,7 +285,7 @@ function schema<
 
   }
 
-  function reduceValues(obj: any, schema: any, reduceValue: ValueReducer<BaseType, ExtraProps>) {
+  function reduceValues(obj: any, schema: any, reduceValue: ValueReducer<BaseType>) {
 
     const baseKeyPath = schema.keyPath()
   
@@ -399,11 +382,11 @@ function schema<
   
   }
   
-  function validate(obj: any, schema: Schema<BaseType,ExtraProps>): BaseType {
+  function validate(obj: any, schema: Schema<BaseType>): BaseType {
     return reduceValues(obj, schema, validateValue)
   }
   
-  const validateValue: ValueReducer<BaseType,ExtraProps> = (value, schema: SchemaValue<BaseType,ExtraProps>, keyPath, options: ValidateOptions = {}) => {
+  const validateValue: ValueReducer<BaseType> = (value, schema: SchemaValue<BaseType>, keyPath, options: ValidateOptions = {}) => {
 
     const {
       ignoreRequired = false,
@@ -631,7 +614,7 @@ function schema<
   }
 
   // validates inputted model for vanilla js (non-typed)
-  validateModel(model, extraProps)
+  validateModel(model)
 
   let proxy:any = new Proxy({
     [SCHEMA_ROOT_KEY]: {
@@ -641,7 +624,7 @@ function schema<
 
   schema = proxy[SCHEMA_ROOT_KEY]
 
-  return schema as BaseSchema<BaseType, ExtraProps>
+  return schema as BaseSchema<BaseType>
 
 }
 

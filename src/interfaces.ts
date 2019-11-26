@@ -1,5 +1,5 @@
 import { SCHEMA_ROOT_KEY, SCHEMA_FACTORY_KEY, SCHEMA_KEY, SCHEMA_VALUE_KEY } from "./index";
-import firebase from 'firebase'
+import { FirebaseMethods } from "./firebase";
 
 // proxy typescript hack
 declare interface ProxyHandler<T> {}
@@ -13,7 +13,7 @@ declare var Proxy: ProxyConstructor;
 
 export type KeyPath = Array<string>
 
-export type ValueReducer<T,MethodTypes> = (value: any, schema: SchemaValue<T,MethodTypes>, keyPath: KeyPath, options?: object) => any
+export type ValueReducer<T> = (value: any, schema: SchemaValue<T>, keyPath: KeyPath, options?: object) => any
 
 export type Validate<T> = (obj: any, options?: ValidateOptions) => T
 export type ValidateOptions = {
@@ -27,14 +27,14 @@ export type Cast<T> = (obj: any) => T
 
 export type GetKeyPath = () => KeyPath
 
-export type SchemaProps<T, MethodTypes = {}> = {
+export type SchemaProps<T> = {
   [SCHEMA_KEY]: string,
   [SCHEMA_FACTORY_KEY]?: any,
   validate: Validate<T>,
   parent: GetParent,
   cast: Cast<T>,
   keyPath: GetKeyPath,
-} & MethodTypes
+} & FirebaseMethods<T>
 
 // strings, booleans, numbers only
 export type RawValue = string | number | boolean
@@ -57,33 +57,27 @@ export interface SchemaValueOptions {
   set?: (val: RawValue) => any,
 }
 
-export type SchemaMethods<T, MethodTypes> = {
-  [K in keyof MethodTypes]: (schema: Schema<T, MethodTypes>) => MethodTypes[K];
-}
-
-export type ExtractSchemaBaseType<SchemaT, MethodTypes> = SchemaT extends Schema<infer T, MethodTypes> ? T : null
-
-export type SchemaValue<T, MethodTypes = {}> = {
+export type SchemaValue<T> = {
   [SCHEMA_VALUE_KEY]: boolean,
   type: TypeConstructor
   typeof: TypeString,
-} & SchemaValueOptions & SchemaProps<T, MethodTypes>
+} & SchemaValueOptions & SchemaProps<T>
 
-export type BaseSchema<T, MethodTypes = {}> = 
-  Schema<T, MethodTypes> &
+export type BaseSchema<T> = 
+  Schema<T> &
   { 
     [SCHEMA_ROOT_KEY]: boolean // include root key for special base case
   }
 
-export type Schema<T, MethodTypes = {}> = {
+export type Schema<T> = {
   [K in keyof T]:
     // check for a value (type constructor or type object)
-    T[K] extends ModelValue ? SchemaValue<T[K], MethodTypes>:
+    T[K] extends ModelValue ? SchemaValue<T[K]>:
     // check for nested object
-    T[K] extends object ? Schema<T[K], MethodTypes>:
+    T[K] extends object ? Schema<T[K]>:
     // default to value
-    SchemaValue<T[K], MethodTypes>;
-} & SchemaProps<T, MethodTypes>
+    SchemaValue<T[K]>;
+} & SchemaProps<T>
 
 /* MODEL TYPES */
 

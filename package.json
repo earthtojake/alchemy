@@ -25,6 +25,7 @@
     "typescript": "^3.6.3"
   },
   "dependencies": {
+    "firebase": "^7.5.0",
     "flat": "^4.1.0",
     "lodash": "^4.17.15"
   }
